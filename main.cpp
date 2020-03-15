@@ -39,6 +39,7 @@ int main(int argc, char **argv) {
     std::vector<std::vector<Point>> contours;
     CDT cdt;
 
+    // TODO: actual arg parsing
     if (argc <= 1) {
         printf("Usage: %s image\n", argv[0]);
         return 1;
@@ -71,6 +72,8 @@ int main(int argc, char **argv) {
     }
     assert(cdt.is_valid());
 
+    Graph G(cdt.number_of_vertices());
+
     int index = 0;
     for (CDT::Finite_vertices_iterator it = cdt.finite_vertices_begin();
          it != cdt.finite_vertices_end(); ++it) {
@@ -78,8 +81,6 @@ int main(int argc, char **argv) {
         it->info() = index;
         index++;
     }
-
-    Graph G(cdt.number_of_vertices());
 
     for (CDT::Finite_edges_iterator eit = cdt.finite_edges_begin();
          eit != cdt.finite_edges_end(); ++eit) {
@@ -95,6 +96,20 @@ int main(int argc, char **argv) {
         boost::add_edge(v1->info(), v2->info(), necessity, G);
     }
     std::cout << cdt.number_of_vertices() << " vertices" << std::endl;
+
+    // TODO: 8-ring
+
+    // TODO: optimization? landmark distance estimation
+
+    // TODO: minimum weight matching
+
+    // TODO: convert to line graph and compute shortest paths (add auxiliary start/end vertices with 0-weight edges connecting to clique?)
+
+    // TODO: eulerize graph
+
+    // TODO: turn graph into apth (Hierholzer's algorithm?)
+
+    // TODO: output path: gcode
 
     // ???
     Mat drawing = Mat::zeros(image_threshold.size(), CV_8UC3);
