@@ -4,13 +4,17 @@
 #include <CGAL/Triangulation.h>
 #include <CGAL/Triangulation_vertex_base_with_id_2.h>
 #include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/kruskal_min_spanning_tree.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <queue>
 
-#define BRIDGE_SIZE 8
+#define MAX_BRIDGE_SIZE 8
+#define ALPHA_E 1
+#define ALPHA_O 2
 
 // TODO move this somewhere else
 // CGAL triangulation
@@ -27,7 +31,8 @@ struct edge_necessity_tag_t {
 };
 enum edge_necessity_t { required, optional };
 
-typedef boost::property<edge_necessity_tag_t, edge_necessity_t> EdgeProperty;
+typedef boost::property<edge_necessity_tag_t, edge_necessity_t,
+boost::property<boost::edge_weight_t, double>> EdgeProperty;
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS,
                               boost::no_property, EdgeProperty>
     Graph;
@@ -89,6 +94,7 @@ int main(int argc, char **argv) {
 
     Mat drawing = Mat::zeros(image_threshold.size(), CV_8UC3); // ???
 
+    // convert cdt to boost graph
     for (CDT::Finite_edges_iterator eit = cdt.finite_edges_begin();
          eit != cdt.finite_edges_end(); ++eit) {
         CDT::Face_handle f = eit->first;
@@ -98,22 +104,19 @@ int main(int argc, char **argv) {
         /*std::cout << "(" << *v1 << ") [" << v1->id() << "] to (" << *v2
                   << ") [" << v2->id()
                   << "] constrained: " << cdt.is_constrained(*eit) << std::endl;*/
-        edge_necessity_t necessity =
-            cdt.is_constrained(*eit) ? required : optional;
-        line(drawing, positions[v1->id()], positions[v2->id()], necessity == required ? CV_RGB(0, 255, 0) : CV_RGB(255, 0, 0));
-        boost::add_edge(v1->id(), v2->id(), necessity, g);
+        boost::add_edge(v1->id(), v2->id(), cdt.is_constrained(*eit) ? required : optional, g);
     }
     std::cout << cdt.number_of_vertices() << " vertices" << std::endl;
 
-    // TODO: 8-ring
+    // add optional bridge edges
     typedef boost::property_map<Graph, boost::vertex_index_t>::type IndexMap;
     IndexMap index = boost::get(boost::vertex_index, g);
     typedef boost::graph_traits<Graph>::vertex_iterator vertex_iter;
     vertex_iter vp, vp_end;
     std::queue<boost::graph_traits<Graph>::vertex_descriptor> queue;
     std::vector<std::pair<int, int>> bridge_edges;
+    std::vector<int> distance(boost::num_vertices(g));
     for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
-        std::vector<int> distance(boost::num_vertices(g));
         if (index[*vp] % 100 == 0) {
             std::cout << "bridging " << index[*vp] << std::endl;
         }
@@ -124,7 +127,7 @@ int main(int argc, char **argv) {
             typename boost::graph_traits<Graph>::adjacency_iterator ai;
             typename boost::graph_traits<Graph>::adjacency_iterator ai_end;
             for (boost::tie(ai, ai_end) = boost::adjacent_vertices(v, g); ai != ai_end; ++ai) {
-                if (cur_distance < BRIDGE_SIZE && index[*ai] != index[*vp] && distance[index[*ai]] == 0) {
+                if (cur_distance < MAX_BRIDGE_SIZE && index[*ai] != index[*vp] && distance[index[*ai]] == 0) {
                     queue.push(*ai);
                     distance[index[*ai]] = cur_distance+1;
                     // don't bridge immediate neighbors, prevent double counting bridge edges
@@ -135,6 +138,7 @@ int main(int argc, char **argv) {
             }
             queue.pop();
         }
+        std::fill(distance.begin(), distance.end(), 0);
     }
     std::cout << "done bridging" << std::endl;
     for (std::pair<int,int> bridge_edge : bridge_edges) {
@@ -143,9 +147,44 @@ int main(int argc, char **argv) {
     }
     std::cout << "done adding bridge edges" << std::endl;
 
+    // mst to connect graph
+    // TODO: MST to connect graph
+    // TODO weight 0 for required, normal weight for optional
+    typedef boost::graph_traits<Graph>::edge_descriptor Edge;
+    std::vector<Edge> mst;
+    boost::property_map<Graph, edge_necessity_tag_t>::type necessity = boost::get(edge_necessity_tag_t(), g);
+    boost::property_map<Graph, boost::edge_weight_t>::type weights = boost::get(boost::edge_weight_t(), g);
+    boost::graph_traits<Graph>::edge_iterator ei, ei_end;
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
+        if (boost::get(necessity, *ei) == required) {
+            // required edges are free
+            boost::put(weights, *ei, 0);
+        } else {
+            Point v1 = positions[index[source(*ei, g)]];
+            Point v2 = positions[index[target(*ei, g)]];
+            // TODO flow alignment term
+            boost::put(weights, *ei, ALPHA_O*hypot(v1.x-v2.x, v1.y-v2.y));
+        }
+        
+    }
+    boost::kruskal_minimum_spanning_tree(g, std::back_inserter(mst));
+    for (std::vector<Edge>::iterator ei = mst.begin(); ei != mst.end(); ++ei) {
+        boost::put(necessity, *ei, required);
+    }
+    std::cout << "done mst" << std::endl;
+
     // TODO: optimization? landmark distance estimation
+    int num_odd = 0;
+    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+        std::vector<int> distance(boost::num_vertices(g));
+        if (degree(*vp, g) % 2 == 1) {
+            num_odd++;
+        }
+    }
+    std::cout << "# odd: " << num_odd << std::endl;
 
     // TODO: minimum weight matching
+
 
     // TODO: convert to line graph and compute shortest paths (add auxiliary start/end vertices with 0-weight edges connecting to clique?)
 
@@ -154,6 +193,13 @@ int main(int argc, char **argv) {
     // TODO: turn graph into path (Hierholzer's algorithm?)
 
     // TODO: output path: gcode
+
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
+        if (boost::get(necessity, *ei) == required) {
+            line(drawing, positions[index[source(*ei, g)]],
+            positions[index[target(*ei, g)]], CV_RGB(0, 255, 0));
+        }
+    }
 
     // display
     namedWindow("Display Image", WINDOW_AUTOSIZE);
