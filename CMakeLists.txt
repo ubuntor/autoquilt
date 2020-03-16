@@ -1,23 +1,29 @@
-include(ExternalProject)
 cmake_minimum_required(VERSION 2.8)
+include(FetchContent)
 project(autoquilt)
 find_package(OpenCV REQUIRED)
 find_package(CGAL REQUIRED)
-add_executable(autoquilt main.cpp)
-
-# TODO: windows support?
-set(BLOSSOM5_MAKE make)
-ExternalProject_Add(blossom5
+# blossom5 source code redistribution prohibited, so we instead fetch it at build
+FetchContent_Declare(blossom5
     URL https://pub.ist.ac.at/~vnk/software/blossom5-v2.05.src.tar.gz
     PREFIX blossom5
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ${BLOSSOM_MAKE}
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND ""
 )
-ExternalProject_Get_Property(blossom5 SOURCE_DIR)
-include_directories(${SOURCE_DIR})
-set(CMAKE_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES} ${SOURCE_DIR})
-add_dependencies(autoquilt blossom5)
-
+FetchContent_MakeAvailable(blossom5)
+include_directories(${blossom5_SOURCE_DIR})
+add_executable(autoquilt
+    ${blossom5_SOURCE_DIR}/misc.cpp
+    ${blossom5_SOURCE_DIR}/PMduals.cpp
+    ${blossom5_SOURCE_DIR}/PMexpand.cpp
+    ${blossom5_SOURCE_DIR}/PMinit.cpp
+    ${blossom5_SOURCE_DIR}/PMinterface.cpp
+    ${blossom5_SOURCE_DIR}/PMmain.cpp
+    ${blossom5_SOURCE_DIR}/PMrepair.cpp
+    ${blossom5_SOURCE_DIR}/PMshrink.cpp
+    ${blossom5_SOURCE_DIR}/GEOM/GPMinit.cpp
+    ${blossom5_SOURCE_DIR}/GEOM/GPMinterface.cpp
+    ${blossom5_SOURCE_DIR}/GEOM/GPMkdtree.cpp
+    ${blossom5_SOURCE_DIR}/GEOM/GPMmain.cpp
+    ${blossom5_SOURCE_DIR}/MinCost/MinCost.cpp
+    main.cpp
+)
 target_link_libraries(autoquilt ${OpenCV_LIBS} CGAL::CGAL)

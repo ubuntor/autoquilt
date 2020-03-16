@@ -15,6 +15,8 @@
 #define MAX_BRIDGE_SIZE 8
 #define ALPHA_E 1
 #define ALPHA_O 2
+// TODO: tweak this
+#define BETA 0.25
 
 // TODO move this somewhere else
 // CGAL triangulation
@@ -148,8 +150,6 @@ int main(int argc, char **argv) {
     std::cout << "done adding bridge edges" << std::endl;
 
     // mst to connect graph
-    // TODO: MST to connect graph
-    // TODO weight 0 for required, normal weight for optional
     typedef boost::graph_traits<Graph>::edge_descriptor Edge;
     std::vector<Edge> mst;
     boost::property_map<Graph, edge_necessity_tag_t>::type necessity = boost::get(edge_necessity_tag_t(), g);
@@ -174,6 +174,7 @@ int main(int argc, char **argv) {
     std::cout << "done mst" << std::endl;
 
     // TODO: optimization? landmark distance estimation
+
     int num_odd = 0;
     for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
         std::vector<int> distance(boost::num_vertices(g));
@@ -185,6 +186,19 @@ int main(int argc, char **argv) {
 
     // TODO: minimum weight matching
 
+    // ???
+    PerfectMatching pm(4, 6);
+    pm.AddEdge(0, 1, 3);
+    pm.AddEdge(2, 3, 4);
+    pm.AddEdge(0, 2, 15);
+    pm.AddEdge(0, 3, 16);
+    pm.AddEdge(1, 2, 17);
+    pm.AddEdge(1, 3, 18);
+    pm.Solve();
+    for (int i = 0; i < 4; i++) {
+        std::cout << i << " <-> " << pm.GetMatch(i) << std::endl;
+    }
+    // ???
 
     // TODO: convert to line graph and compute shortest paths (add auxiliary start/end vertices with 0-weight edges connecting to clique?)
 
