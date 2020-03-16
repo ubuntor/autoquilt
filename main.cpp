@@ -38,6 +38,8 @@ boost::property<boost::edge_weight_t, double>> EdgeProperty;
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS,
                               boost::no_property, EdgeProperty>
     Graph;
+typedef boost::graph_traits<Graph>::vertex_descriptor Vertex;
+typedef boost::graph_traits<Graph>::edge_descriptor Edge;
 
 using namespace cv;
 
@@ -150,7 +152,7 @@ int main(int argc, char **argv) {
     std::cout << "done adding bridge edges" << std::endl;
 
     // mst to connect graph
-    typedef boost::graph_traits<Graph>::edge_descriptor Edge;
+
     std::vector<Edge> mst;
     boost::property_map<Graph, edge_necessity_tag_t>::type necessity = boost::get(edge_necessity_tag_t(), g);
     boost::property_map<Graph, boost::edge_weight_t>::type weights = boost::get(boost::edge_weight_t(), g);
@@ -174,31 +176,40 @@ int main(int argc, char **argv) {
     std::cout << "done mst" << std::endl;
 
     // TODO: optimization? landmark distance estimation
-
-    int num_odd = 0;
+    std::vector<Vertex> odd_verts;
     for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
-        std::vector<int> distance(boost::num_vertices(g));
         if (degree(*vp, g) % 2 == 1) {
-            num_odd++;
+            odd_verts.push_back(*vp);
         }
     }
+    int num_odd = odd_verts.size();
     std::cout << "# odd: " << num_odd << std::endl;
 
     // TODO: minimum weight matching
-
-    // ???
-    PerfectMatching pm(4, 6);
-    pm.AddEdge(0, 1, 3);
-    pm.AddEdge(2, 3, 4);
-    pm.AddEdge(0, 2, 15);
-    pm.AddEdge(0, 3, 16);
-    pm.AddEdge(1, 2, 17);
-    pm.AddEdge(1, 3, 18);
+    // fill in required edge weights
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
+        if (boost::get(necessity, *ei) == required) {
+            Point v1 = positions[index[source(*ei, g)]];
+            Point v2 = positions[index[target(*ei, g)]];
+            boost::put(weights, *ei, ALPHA_E * hypot(v1.x - v2.x, v1.y - v2.y));
+        }
+    }
+    PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
+    std::cout << "calculating odd vert distances" << std::endl;
+    for (int i = 0; i < num_odd - 1; i++) {
+        // TODO dijkstra_shortest_paths, distance map
+        for (int j = i + 1; j < num_odd; j++) {
+            // TODO: lookup in distance map
+            double weight = 0;
+            std::cout << odd_verts[i] << " <-> " << odd_verts[j] << ": " << weight << std::endl;
+            pm.AddEdge(i, j, 1);
+        }
+    }
+    std::cout << "start matching" << std::endl;
     pm.Solve();
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < num_odd; i++) {
         std::cout << i << " <-> " << pm.GetMatch(i) << std::endl;
     }
-    // ???
 
     // TODO: convert to line graph and compute shortest paths (add auxiliary start/end vertices with 0-weight edges connecting to clique?)
 
