@@ -2,17 +2,20 @@
 #include <CGAL/Constrained_Delaunay_triangulation_2.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Triangulation.h>
-#include <CGAL/Triangulation_vertex_base_with_info_2.h>
+#include <CGAL/Triangulation_vertex_base_with_id_2.h>
 #include <boost/graph/adjacency_list.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <stdio.h>
 #include <stdlib.h>
+#include <queue>
+
+#define BRIDGE_SIZE 8
 
 // TODO move this somewhere else
 // CGAL triangulation
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
-typedef CGAL::Triangulation_vertex_base_with_info_2<int, K> Vb;
+typedef CGAL::Triangulation_vertex_base_with_id_2<K> Vb;
 typedef CGAL::Constrained_triangulation_face_base_2<K> Fb;
 typedef CGAL::Triangulation_data_structure_2<Vb, Fb> TDS;
 typedef CGAL::Exact_predicates_tag Itag;
@@ -72,15 +75,19 @@ int main(int argc, char **argv) {
     }
     assert(cdt.is_valid());
 
-    Graph G(cdt.number_of_vertices());
+    Graph g(cdt.number_of_vertices());
+    std::vector<Point> positions(cdt.number_of_vertices());
 
-    int index = 0;
+    int id = 0;
     for (CDT::Finite_vertices_iterator it = cdt.finite_vertices_begin();
          it != cdt.finite_vertices_end(); ++it) {
         std::cout << it->point() << std::endl;
-        it->info() = index;
-        index++;
+        it->id() = id;
+        positions[id] = Point(it->point().x(), it->point().y());
+        id++;
     }
+
+    Mat drawing = Mat::zeros(image_threshold.size(), CV_8UC3); // ???
 
     for (CDT::Finite_edges_iterator eit = cdt.finite_edges_begin();
          eit != cdt.finite_edges_end(); ++eit) {
@@ -88,16 +95,53 @@ int main(int argc, char **argv) {
         int i = eit->second;
         CDT::Vertex_handle v1 = f->vertex(CDT::cw(i));
         CDT::Vertex_handle v2 = f->vertex(CDT::ccw(i));
-        std::cout << "(" << *v1 << ") [" << v1->info() << "] to (" << *v2
-                  << ") [" << v2->info()
-                  << "] constrained: " << cdt.is_constrained(*eit) << std::endl;
+        /*std::cout << "(" << *v1 << ") [" << v1->id() << "] to (" << *v2
+                  << ") [" << v2->id()
+                  << "] constrained: " << cdt.is_constrained(*eit) << std::endl;*/
         edge_necessity_t necessity =
             cdt.is_constrained(*eit) ? required : optional;
-        boost::add_edge(v1->info(), v2->info(), necessity, G);
+        line(drawing, positions[v1->id()], positions[v2->id()], necessity == required ? CV_RGB(0, 255, 0) : CV_RGB(255, 0, 0));
+        boost::add_edge(v1->id(), v2->id(), necessity, g);
     }
     std::cout << cdt.number_of_vertices() << " vertices" << std::endl;
 
     // TODO: 8-ring
+    typedef boost::property_map<Graph, boost::vertex_index_t>::type IndexMap;
+    IndexMap index = boost::get(boost::vertex_index, g);
+    typedef boost::graph_traits<Graph>::vertex_iterator vertex_iter;
+    vertex_iter vp, vp_end;
+    std::queue<boost::graph_traits<Graph>::vertex_descriptor> queue;
+    std::vector<std::pair<int, int>> bridge_edges;
+    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+        std::vector<int> distance(boost::num_vertices(g));
+        if (index[*vp] % 100 == 0) {
+            std::cout << "bridging " << index[*vp] << std::endl;
+        }
+        queue.push(*vp);
+        while (!queue.empty()) {
+            typename boost::graph_traits<Graph>::vertex_descriptor v = queue.front();
+            int cur_distance = distance[v];
+            typename boost::graph_traits<Graph>::adjacency_iterator ai;
+            typename boost::graph_traits<Graph>::adjacency_iterator ai_end;
+            for (boost::tie(ai, ai_end) = boost::adjacent_vertices(v, g); ai != ai_end; ++ai) {
+                if (cur_distance < BRIDGE_SIZE && index[*ai] != index[*vp] && distance[index[*ai]] == 0) {
+                    queue.push(*ai);
+                    distance[index[*ai]] = cur_distance+1;
+                    // don't bridge immediate neighbors, prevent double counting bridge edges
+                    if (cur_distance > 1 && index[*vp] < index[*ai]) {
+                        bridge_edges.push_back(std::pair<int,int>(index[*vp], index[*ai]));
+                    }
+                }
+            }
+            queue.pop();
+        }
+    }
+    std::cout << "done bridging" << std::endl;
+    for (std::pair<int,int> bridge_edge : bridge_edges) {
+        boost::add_edge(bridge_edge.first, bridge_edge.second, optional, g);
+        //line(drawing, positions[bridge_edge.first], positions[bridge_edge.second], CV_RGB(0, 0, 255));
+    }
+    std::cout << "done adding bridge edges" << std::endl;
 
     // TODO: optimization? landmark distance estimation
 
@@ -107,18 +151,9 @@ int main(int argc, char **argv) {
 
     // TODO: eulerize graph
 
-    // TODO: turn graph into apth (Hierholzer's algorithm?)
+    // TODO: turn graph into path (Hierholzer's algorithm?)
 
     // TODO: output path: gcode
-
-    // ???
-    Mat drawing = Mat::zeros(image_threshold.size(), CV_8UC3);
-    for (int i = 0; i < contours.size(); i++) {
-        Scalar color = Scalar(rng.uniform(0, 255), rng.uniform(0, 255),
-                              rng.uniform(0, 255));
-        drawContours(drawing, contours, i, color);
-    }
-    // ???
 
     // display
     namedWindow("Display Image", WINDOW_AUTOSIZE);
