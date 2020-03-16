@@ -4,19 +4,21 @@
 #include <CGAL/Triangulation.h>
 #include <CGAL/Triangulation_vertex_base_with_id_2.h>
 #include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/dijkstra_shortest_paths.hpp>
 #include <boost/graph/kruskal_min_spanning_tree.hpp>
+#include <math.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
+#include <queue>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
-#include <queue>
 
 #define MAX_BRIDGE_SIZE 8
 #define ALPHA_E 1
 #define ALPHA_O 2
-// TODO: tweak this
+// TODO: tweak these
 #define BETA 0.25
+#define MATCHING_DISTANCE_SCALE 1000
 
 // TODO move this somewhere else
 // CGAL triangulation
@@ -164,7 +166,7 @@ int main(int argc, char **argv) {
         } else {
             Point v1 = positions[index[source(*ei, g)]];
             Point v2 = positions[index[target(*ei, g)]];
-            // TODO flow alignment term
+            // TODO flow alignment term from FDoG
             boost::put(weights, *ei, ALPHA_O*hypot(v1.x-v2.x, v1.y-v2.y));
         }
         
@@ -185,7 +187,7 @@ int main(int argc, char **argv) {
     int num_odd = odd_verts.size();
     std::cout << "# odd: " << num_odd << std::endl;
 
-    // TODO: minimum weight matching
+    // minimum weight matching for odd-degree vertices
     // fill in required edge weights
     for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
         if (boost::get(necessity, *ei) == required) {
@@ -197,12 +199,14 @@ int main(int argc, char **argv) {
     PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     std::cout << "calculating odd vert distances" << std::endl;
     for (int i = 0; i < num_odd - 1; i++) {
-        // TODO dijkstra_shortest_paths, distance map
+        std::vector<double> distances(boost::num_vertices(g));
+        boost::dijkstra_shortest_paths(g, odd_verts[i],
+                                       boost::distance_map(boost::make_iterator_property_map(
+                                           distances.begin(), boost::get(boost::vertex_index, g))));
         for (int j = i + 1; j < num_odd; j++) {
-            // TODO: lookup in distance map
-            double weight = 0;
-            std::cout << odd_verts[i] << " <-> " << odd_verts[j] << ": " << weight << std::endl;
-            pm.AddEdge(i, j, 1);
+            int weight = (int)(MATCHING_DISTANCE_SCALE * distances[odd_verts[j]]);
+            // std::cout << odd_verts[i] << " <-> " << odd_verts[j] << ": " << weight << std::endl;
+            pm.AddEdge(i, j, weight);
         }
     }
     std::cout << "start matching" << std::endl;
