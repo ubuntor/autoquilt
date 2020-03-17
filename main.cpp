@@ -14,7 +14,7 @@
 #include <stdlib.h>
 
 // max radius for bridges
-#define MAX_BRIDGE_SIZE 8
+#define MAX_BRIDGE_RADIUS 8
 // required edge weight
 #define ALPHA_E 1
 // optional edge weight
@@ -56,8 +56,6 @@ typedef boost::graph_traits<Graph>::vertex_descriptor Vertex;
 typedef boost::graph_traits<Graph>::edge_descriptor Edge;
 
 using namespace cv;
-
-RNG rng(12345); // ???
 
 int main(int argc, char **argv) {
     // TODO: split this up
@@ -145,7 +143,7 @@ int main(int argc, char **argv) {
             typename boost::graph_traits<Graph>::adjacency_iterator ai;
             typename boost::graph_traits<Graph>::adjacency_iterator ai_end;
             for (boost::tie(ai, ai_end) = boost::adjacent_vertices(v, g); ai != ai_end; ++ai) {
-                if (cur_distance < MAX_BRIDGE_SIZE && index[*ai] != index[*vp] && distance[index[*ai]] == 0) {
+                if (cur_distance < MAX_BRIDGE_RADIUS && index[*ai] != index[*vp] && distance[index[*ai]] == 0) {
                     queue.push(*ai);
                     distance[index[*ai]] = cur_distance+1;
                     // don't bridge immediate neighbors, prevent double counting bridge edges
@@ -189,18 +187,6 @@ int main(int argc, char **argv) {
         boost::put(necessity, *ei, required);
     }
     std::cout << "done mst" << std::endl;
-
-    // TODO: optimization? landmark distance estimation
-    std::vector<Vertex> odd_verts;
-    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
-        if (degree(*vp, g) % 2 == 1) {
-            odd_verts.push_back(*vp);
-        }
-    }
-    int num_odd = odd_verts.size();
-    std::cout << "# odd: " << num_odd << std::endl;
-
-    // minimum weight matching for odd-degree vertices
     // fill in required edge weights
     for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
         if (boost::get(necessity, *ei) == required) {
@@ -209,6 +195,26 @@ int main(int argc, char **argv) {
             boost::put(weights, *ei, ALPHA_E * hypot(v1.x - v2.x, v1.y - v2.y));
         }
     }
+
+    std::vector<Vertex> odd_verts;
+    typename boost::graph_traits<Graph>::out_edge_iterator out_i;
+    typename boost::graph_traits<Graph>::out_edge_iterator out_end;
+    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+        int required_degree = 0;
+        for (boost::tie(out_i, out_end) = boost::out_edges(*vp, g); out_i != out_end; ++out_i) {
+            if (boost::get(necessity, *out_i) == required) {
+                required_degree++;
+            }
+        }
+        if (required_degree % 2 == 1) {
+            odd_verts.push_back(*vp);
+        }
+    }
+    int num_odd = odd_verts.size();
+    std::cout << "# odd: " << num_odd << std::endl;
+
+    // minimum weight matching for odd-degree vertices
+    // TODO: optimization? landmark distance estimation
     PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     std::cout << "calculating odd vert distances" << std::endl;
     for (int i = 0; i < num_odd - 1; i++) {
@@ -228,51 +234,26 @@ int main(int argc, char **argv) {
     }
     std::cout << "start matching" << std::endl;
     pm.Solve();
+
+    // TODO: use implicit line graph instead so we can add a curvature term
+    std::vector<std::pair<int, int>> matching_edges;
+    std::vector<Vertex> predecessors(boost::num_vertices(g));
     for (int i = 0; i < num_odd; i++) {
         int match = pm.GetMatch(i);
-        // std::cout << i << " <-> " << match << std::endl;
+        // don't double count matches
         if (i < match) {
-            line(drawing, positions[odd_verts[i]], positions[odd_verts[match]],
-                 CV_RGB(255, 255, 0));
-        }
-    }
-
-    // TODO: convert to line graph and compute shortest paths (add auxiliary start/end vertices with 0-weight edges connecting to clique?)
-    typedef boost::property_map<Graph, boost::edge_index_t>::type EdgeIndexMap;
-    EdgeIndexMap edge_index = boost::get(boost::edge_index, g);
-    LineGraph line_graph(boost::num_edges(g));
-    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
-        if (index[*vp] % 100 == 0) {
-            std::cout << "converting line graph " << index[*vp] << std::endl;
-        }
-        typename boost::graph_traits<Graph>::out_edge_iterator out_i;
-        typename boost::graph_traits<Graph>::out_edge_iterator out_j; // TODO: is this safe?
-        typename boost::graph_traits<Graph>::out_edge_iterator out_end;
-        for (boost::tie(out_i, out_end) = boost::out_edges(*vp, g); out_i != out_end; ++out_i) {
-            for (out_j = out_i + 1; out_j != out_end; out_j++) {
-                Vertex v1 = (source(*out_i, g) == *vp) ? target(*out_i, g) : source(*out_i, g);
-                Vertex v2 = (source(*out_j, g) == *vp) ? target(*out_j, g) : source(*out_j, g);
-                Point p1 = positions[index[v1]];
-                Point p2 = positions[index[v2]];
-                Point p = positions[index[*vp]];
-                double e1_length = hypot(p1.x - p.x, p1.y - p.y);
-                double e2_length = hypot(p2.x - p.x, p2.y - p.y);
-                // TODO: use an approximation instead?
-                double curvature =
-                    pow(acos(((p1.x - p.x) * (p2.x - p.x) + (p1.y - p.y) * (p2.y - p.y)) /
-                             (e1_length * e2_length)),
-                        2) /
-                    min(e1_length, e2_length);
-                double weight = (boost::get(weights, *out_i) + boost::get(weights, *out_j)) / 2 +
-                                GAMMA * curvature;
-                boost::add_edge(edge_index[*out_i], edge_index[*out_j], weight, line_graph);
+            boost::dijkstra_shortest_paths(g, odd_verts[i], boost::predecessor_map(&predecessors[0]));
+            Vertex current = odd_verts[match];
+            while (current != odd_verts[i]) {
+                Vertex predecessor = predecessors[current];
+                matching_edges.push_back(std::pair<int,int>(index[current], index[predecessor]));
+                current = predecessor;
             }
         }
     }
-    std::cout << "done with line graph: # verts: " << boost::num_vertices(line_graph)
-              << " # edges: " << boost::num_edges(line_graph) << std::endl;
-
-    // TODO: eulerize graph
+    for (std::pair<int,int> matching_edge : matching_edges) {
+        boost::add_edge(matching_edge.first, matching_edge.second, required, g);
+    }
 
     // TODO: turn graph into path (Hierholzer's algorithm?): maybe with minimum curvature?
 
@@ -283,6 +264,19 @@ int main(int argc, char **argv) {
             line(drawing, positions[index[source(*ei, g)]],
             positions[index[target(*ei, g)]], CV_RGB(0, 255, 0));
         }
+    }
+    for (std::pair<int,int> matching_edge : matching_edges) {
+            line(drawing, positions[matching_edge.first],
+            positions[matching_edge.second], CV_RGB(255, 255, 0));
+    }
+    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+        int required_degree = 0;
+        for (boost::tie(out_i, out_end) = boost::out_edges(*vp, g); out_i != out_end; ++out_i) {
+            if (boost::get(necessity, *out_i) == required) {
+                required_degree++;
+            }
+        }
+        assert(required_degree % 2 == 0);
     }
 
     // display
