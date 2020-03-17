@@ -13,11 +13,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// max radius for bridges
 #define MAX_BRIDGE_SIZE 8
+// required edge weight
 #define ALPHA_E 1
+// optional edge weight
 #define ALPHA_O 2
+
 // TODO: tweak these
+// alignment weight in optional edge weight
 #define BETA 0.25
+// curvature weight in matching path line graph edge weight
+#define GAMMA 2
 #define MATCHING_DISTANCE_SCALE 1000
 
 // TODO move this somewhere else
@@ -35,11 +42,16 @@ struct edge_necessity_tag_t {
 };
 enum edge_necessity_t { required, optional };
 
-typedef boost::property<edge_necessity_tag_t, edge_necessity_t,
-boost::property<boost::edge_weight_t, double>> EdgeProperty;
-typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS,
-                              boost::no_property, EdgeProperty>
+typedef boost::property<
+    edge_necessity_tag_t, edge_necessity_t,
+    boost::property<boost::edge_weight_t, double, boost::property<boost::edge_index_t, int>>>
+    EdgeProperty;
+typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, boost::no_property,
+                              EdgeProperty>
     Graph;
+typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, boost::no_property,
+                              boost::property<boost::edge_weight_t, double>>
+    LineGraph;
 typedef boost::graph_traits<Graph>::vertex_descriptor Vertex;
 typedef boost::graph_traits<Graph>::edge_descriptor Edge;
 
@@ -72,7 +84,7 @@ int main(int argc, char **argv) {
     threshold(image_gdiff, image_threshold, 127, 255,
               THRESH_BINARY | THRESH_OTSU);
     findContours(image_threshold, contours, RETR_LIST,
-                 CHAIN_APPROX_SIMPLE); // ???
+                 CHAIN_APPROX_TC89_KCOS); // ???
 
     // optional edges
     std::cout << "Contours found" << std::endl;
@@ -92,7 +104,7 @@ int main(int argc, char **argv) {
     int id = 0;
     for (CDT::Finite_vertices_iterator it = cdt.finite_vertices_begin();
          it != cdt.finite_vertices_end(); ++it) {
-        std::cout << it->point() << std::endl;
+        // std::cout << it->point() << std::endl;
         it->id() = id;
         positions[id] = Point(it->point().x(), it->point().y());
         id++;
@@ -151,7 +163,8 @@ int main(int argc, char **argv) {
         boost::add_edge(bridge_edge.first, bridge_edge.second, optional, g);
         //line(drawing, positions[bridge_edge.first], positions[bridge_edge.second], CV_RGB(0, 0, 255));
     }
-    std::cout << "done adding bridge edges" << std::endl;
+    std::cout << "done adding bridge edges: # verts: " << boost::num_vertices(g)
+              << " # edges: " << boost::num_edges(g) << std::endl;
 
     // mst to connect graph
 
@@ -199,11 +212,15 @@ int main(int argc, char **argv) {
     PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     std::cout << "calculating odd vert distances" << std::endl;
     for (int i = 0; i < num_odd - 1; i++) {
+        if (i % 100 == 0) {
+            std::cout << "distance " << i << std::endl;
+        }
         std::vector<double> distances(boost::num_vertices(g));
         boost::dijkstra_shortest_paths(g, odd_verts[i],
                                        boost::distance_map(boost::make_iterator_property_map(
                                            distances.begin(), boost::get(boost::vertex_index, g))));
         for (int j = i + 1; j < num_odd; j++) {
+            // blossom5 needs integer weights for optimality
             int weight = (int)(MATCHING_DISTANCE_SCALE * distances[odd_verts[j]]);
             // std::cout << odd_verts[i] << " <-> " << odd_verts[j] << ": " << weight << std::endl;
             pm.AddEdge(i, j, weight);
@@ -212,14 +229,52 @@ int main(int argc, char **argv) {
     std::cout << "start matching" << std::endl;
     pm.Solve();
     for (int i = 0; i < num_odd; i++) {
-        std::cout << i << " <-> " << pm.GetMatch(i) << std::endl;
+        int match = pm.GetMatch(i);
+        // std::cout << i << " <-> " << match << std::endl;
+        if (i < match) {
+            line(drawing, positions[odd_verts[i]], positions[odd_verts[match]],
+                 CV_RGB(255, 255, 0));
+        }
     }
 
     // TODO: convert to line graph and compute shortest paths (add auxiliary start/end vertices with 0-weight edges connecting to clique?)
+    typedef boost::property_map<Graph, boost::edge_index_t>::type EdgeIndexMap;
+    EdgeIndexMap edge_index = boost::get(boost::edge_index, g);
+    LineGraph line_graph(boost::num_edges(g));
+    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+        if (index[*vp] % 100 == 0) {
+            std::cout << "converting line graph " << index[*vp] << std::endl;
+        }
+        typename boost::graph_traits<Graph>::out_edge_iterator out_i;
+        typename boost::graph_traits<Graph>::out_edge_iterator out_j; // TODO: is this safe?
+        typename boost::graph_traits<Graph>::out_edge_iterator out_end;
+        for (boost::tie(out_i, out_end) = boost::out_edges(*vp, g); out_i != out_end; ++out_i) {
+            for (out_j = out_i + 1; out_j != out_end; out_j++) {
+                Vertex v1 = (source(*out_i, g) == *vp) ? target(*out_i, g) : source(*out_i, g);
+                Vertex v2 = (source(*out_j, g) == *vp) ? target(*out_j, g) : source(*out_j, g);
+                Point p1 = positions[index[v1]];
+                Point p2 = positions[index[v2]];
+                Point p = positions[index[*vp]];
+                double e1_length = hypot(p1.x - p.x, p1.y - p.y);
+                double e2_length = hypot(p2.x - p.x, p2.y - p.y);
+                // TODO: use an approximation instead?
+                double curvature =
+                    pow(acos(((p1.x - p.x) * (p2.x - p.x) + (p1.y - p.y) * (p2.y - p.y)) /
+                             (e1_length * e2_length)),
+                        2) /
+                    min(e1_length, e2_length);
+                double weight = (boost::get(weights, *out_i) + boost::get(weights, *out_j)) / 2 +
+                                GAMMA * curvature;
+                boost::add_edge(edge_index[*out_i], edge_index[*out_j], weight, line_graph);
+            }
+        }
+    }
+    std::cout << "done with line graph: # verts: " << boost::num_vertices(line_graph)
+              << " # edges: " << boost::num_edges(line_graph) << std::endl;
 
     // TODO: eulerize graph
 
-    // TODO: turn graph into path (Hierholzer's algorithm?)
+    // TODO: turn graph into path (Hierholzer's algorithm?): maybe with minimum curvature?
 
     // TODO: output path: gcode
 
