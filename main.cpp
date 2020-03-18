@@ -4,6 +4,7 @@
 #include <CGAL/Triangulation.h>
 #include <CGAL/Triangulation_vertex_base_with_id_2.h>
 #include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/astar_search.hpp>
 #include <boost/graph/dijkstra_shortest_paths.hpp>
 #include <boost/graph/kruskal_min_spanning_tree.hpp>
 #include <deque>
@@ -55,6 +56,32 @@ typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, boos
     Graph;
 typedef boost::graph_traits<Graph>::vertex_descriptor Vertex;
 typedef boost::graph_traits<Graph>::edge_descriptor Edge;
+
+class graph_heuristic : public boost::astar_heuristic<Graph, double> {
+  public:
+    graph_heuristic(std::vector<cv::Point> p, Vertex goal) : m_positions(p), m_goal(goal){};
+    double operator()(Vertex v) {
+        return ALPHA_E * hypot(m_positions[v].x - m_positions[m_goal].x,
+                               m_positions[v].y - m_positions[m_goal].y);
+    }
+
+  private:
+    std::vector<cv::Point> m_positions;
+    Vertex m_goal;
+};
+struct found_goal {}; // exception for termination
+// visitor that terminates when we find the goal
+class astar_goal_visitor : public boost::default_astar_visitor {
+  public:
+    astar_goal_visitor(Vertex goal) : m_goal(goal) {}
+    template <class Graph> void examine_vertex(Vertex u, Graph &g) {
+        if (u == m_goal)
+            throw found_goal();
+    }
+
+  private:
+    Vertex m_goal;
+};
 
 using namespace cv;
 
@@ -246,12 +273,20 @@ int main(int argc, char **argv) {
         int match = pm.GetMatch(i);
         // don't double count matches
         if (i < match) {
-            boost::dijkstra_shortest_paths(g, odd_verts[i], boost::predecessor_map(&predecessors[0]));
-            Vertex current = odd_verts[match];
-            while (current != odd_verts[i]) {
-                Vertex predecessor = predecessors[current];
-                matching_edges.push_back(std::pair<int,int>(index[current], index[predecessor]));
-                current = predecessor;
+            Vertex start = odd_verts[i];
+            Vertex goal = odd_verts[match];
+            try {
+                boost::astar_search(
+                    g, start, graph_heuristic(positions, goal),
+                    boost::predecessor_map(&predecessors[0]).visitor(astar_goal_visitor(goal)));
+            } catch (found_goal gf) {
+                Vertex current = goal;
+                while (current != start) {
+                    Vertex predecessor = predecessors[current];
+                    matching_edges.push_back(
+                        std::pair<int, int>(index[current], index[predecessor]));
+                    current = predecessor;
+                }
             }
         }
     }
