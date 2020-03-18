@@ -6,6 +6,7 @@
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/dijkstra_shortest_paths.hpp>
 #include <boost/graph/kruskal_min_spanning_tree.hpp>
+#include <deque>
 #include <math.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
@@ -26,6 +27,9 @@
 // curvature weight in matching path line graph edge weight
 #define GAMMA 2
 #define MATCHING_DISTANCE_SCALE 1000
+
+// TODO: make this an option
+#define MAX_DIMENSION 10
 
 // TODO move this somewhere else
 // CGAL triangulation
@@ -49,9 +53,6 @@ typedef boost::property<
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, boost::no_property,
                               EdgeProperty>
     Graph;
-typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, boost::no_property,
-                              boost::property<boost::edge_weight_t, double>>
-    LineGraph;
 typedef boost::graph_traits<Graph>::vertex_descriptor Vertex;
 typedef boost::graph_traits<Graph>::edge_descriptor Edge;
 
@@ -64,8 +65,8 @@ int main(int argc, char **argv) {
     CDT cdt;
 
     // TODO: actual arg parsing
-    if (argc <= 1) {
-        printf("Usage: %s image\n", argv[0]);
+    if (argc <= 2) {
+        printf("Usage: %s [image] [output file]\n", argv[0]);
         return 1;
     }
     image = imread(argv[1], IMREAD_GRAYSCALE);
@@ -129,7 +130,7 @@ int main(int argc, char **argv) {
     IndexMap index = boost::get(boost::vertex_index, g);
     typedef boost::graph_traits<Graph>::vertex_iterator vertex_iter;
     vertex_iter vp, vp_end;
-    std::queue<boost::graph_traits<Graph>::vertex_descriptor> queue;
+    std::queue<Vertex> queue;
     std::vector<std::pair<int, int>> bridge_edges;
     std::vector<int> distance(boost::num_vertices(g));
     for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
@@ -170,7 +171,7 @@ int main(int argc, char **argv) {
     boost::property_map<Graph, edge_necessity_tag_t>::type necessity = boost::get(edge_necessity_tag_t(), g);
     boost::property_map<Graph, boost::edge_weight_t>::type weights = boost::get(boost::edge_weight_t(), g);
     boost::graph_traits<Graph>::edge_iterator ei, ei_end;
-    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
         if (boost::get(necessity, *ei) == required) {
             // required edges are free
             boost::put(weights, *ei, 0);
@@ -180,7 +181,6 @@ int main(int argc, char **argv) {
             // TODO flow alignment term from FDoG
             boost::put(weights, *ei, ALPHA_O*hypot(v1.x-v2.x, v1.y-v2.y));
         }
-        
     }
     boost::kruskal_minimum_spanning_tree(g, std::back_inserter(mst));
     for (std::vector<Edge>::iterator ei = mst.begin(); ei != mst.end(); ++ei) {
@@ -197,10 +197,10 @@ int main(int argc, char **argv) {
     }
 
     std::vector<Vertex> odd_verts;
-    typename boost::graph_traits<Graph>::out_edge_iterator out_i;
-    typename boost::graph_traits<Graph>::out_edge_iterator out_end;
     for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
         int required_degree = 0;
+        typename boost::graph_traits<Graph>::out_edge_iterator out_i;
+        typename boost::graph_traits<Graph>::out_edge_iterator out_end;
         for (boost::tie(out_i, out_end) = boost::out_edges(*vp, g); out_i != out_end; ++out_i) {
             if (boost::get(necessity, *out_i) == required) {
                 required_degree++;
@@ -215,6 +215,7 @@ int main(int argc, char **argv) {
 
     // minimum weight matching for odd-degree vertices
     // TODO: optimization? landmark distance estimation
+    // TODO: A* with heuristic ALPHA_E*|e|
     PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     std::cout << "calculating odd vert distances" << std::endl;
     for (int i = 0; i < num_odd - 1; i++) {
@@ -239,6 +240,9 @@ int main(int argc, char **argv) {
     std::vector<std::pair<int, int>> matching_edges;
     std::vector<Vertex> predecessors(boost::num_vertices(g));
     for (int i = 0; i < num_odd; i++) {
+        if (i % 100 == 0) {
+            std::cout << "matching path " << i << std::endl;
+        }
         int match = pm.GetMatch(i);
         // don't double count matches
         if (i < match) {
@@ -255,28 +259,77 @@ int main(int argc, char **argv) {
         boost::add_edge(matching_edge.first, matching_edge.second, required, g);
     }
 
-    // TODO: turn graph into path (Hierholzer's algorithm?): maybe with minimum curvature?
+    // Hierholzer's algorithm: get eulerian cycle
+    typedef boost::property_map<Graph, boost::edge_index_t>::type EdgeIndexMap;
+    EdgeIndexMap edge_index = boost::get(boost::edge_index, g);
+    int num_required = 0;
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
+        if (boost::get(necessity, *ei) == required) {
+            boost::put(edge_index, *ei, num_required);
+            num_required++;
+        }
+    }
+    std::vector<bool> edge_used(num_required);
+    std::deque<Edge> cycle;
+    // find a required edge
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
+        if (boost::get(necessity, *ei) == required) {
+            cycle.push_back(*ei);
+            num_required--;
+            break;
+        }
+    }
+    while (num_required > 0) {
+        Edge e = cycle.front();
+        typename boost::graph_traits<Graph>::out_edge_iterator out_i;
+        typename boost::graph_traits<Graph>::out_edge_iterator out_end;
+        bool found = false;
+        for (boost::tie(out_i, out_end) = boost::out_edges(boost::target(e, g), g);
+             out_i != out_end; ++out_i) {
+            if (boost::get(necessity, *out_i) == required && !edge_used[edge_index[*out_i]]) {
+                edge_used[edge_index[*out_i]] = true;
+                found = true;
+                cycle.push_front(*out_i);
+                num_required--;
+                break;
+            }
+        }
+        if (!found) {
+            cycle.push_back(e);
+            cycle.pop_front();
+        }
+    }
+    std::cout << "done converting to cycle" << std::endl;
 
-    // TODO: output path: gcode
+    // output pat file
+    FILE *pat_file = fopen(argv[2], "w");
+    if (pat_file == NULL) {
+        std::cout << "could not open output file!" << std::endl;
+        return 1;
+    }
+    double scale = MAX_DIMENSION / ((double)max(image.cols, image.rows));
+    Point start = positions[index[boost::source(cycle.front(), g)]];
+    fprintf(pat_file, "N1G00X%.3fY%.3f\r\n", start.x * scale, MAX_DIMENSION - start.y * scale);
+    int line_number = 1;
+    for (Edge e : cycle) {
+        Vertex v = boost::target(e, g);
+        Point p = positions[index[v]];
+        fprintf(pat_file, "N%dG01X%.3fY%.3f\r\n", line_number, p.x * scale,
+                MAX_DIMENSION - p.y * scale);
+        line_number++;
+    }
+    fprintf(pat_file, "N%dM02\r\n", line_number);
+    fclose(pat_file);
 
-    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
         if (boost::get(necessity, *ei) == required) {
             line(drawing, positions[index[source(*ei, g)]],
             positions[index[target(*ei, g)]], CV_RGB(0, 255, 0));
         }
     }
     for (std::pair<int,int> matching_edge : matching_edges) {
-            line(drawing, positions[matching_edge.first],
-            positions[matching_edge.second], CV_RGB(255, 255, 0));
-    }
-    for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
-        int required_degree = 0;
-        for (boost::tie(out_i, out_end) = boost::out_edges(*vp, g); out_i != out_end; ++out_i) {
-            if (boost::get(necessity, *out_i) == required) {
-                required_degree++;
-            }
-        }
-        assert(required_degree % 2 == 0);
+        line(drawing, positions[matching_edge.first], positions[matching_edge.second],
+             CV_RGB(255, 0, 0));
     }
 
     // display
