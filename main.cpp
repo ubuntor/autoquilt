@@ -25,7 +25,7 @@
 
 // TODO: tweak these
 // alignment weight in optional edge weight
-#define BETA 0.25
+#define BETA 2
 // curvature weight in matching path line graph edge weight
 #define GAMMA 2
 #define MATCHING_DISTANCE_SCALE 1000
@@ -84,9 +84,43 @@ class astar_goal_visitor : public boost::default_astar_visitor {
     Vertex m_goal;
 };
 
+void flow_map(cv::Mat &src, cv::Mat &dst_x, cv::Mat &dst_y) {
+    cv::Mat img, dx, dy, dxx, dyy, dxy;
+    // structure tensor
+    src.convertTo(img, CV_32F);
+    cv::Sobel(img, dx, CV_32F, 1, 0);
+    cv::Sobel(img, dy, CV_32F, 0, 1);
+    cv::multiply(dx, dx, dxx);
+    cv::multiply(dy, dy, dyy);
+    cv::multiply(dx, dy, dxy);
+    cv::transform(dxx, dxx, cv::Matx13f(1, 1, 1));
+    cv::transform(dyy, dyy, cv::Matx13f(1, 1, 1));
+    cv::transform(dxy, dxy, cv::Matx13f(1, 1, 1));
+    // smooth structure tensor
+    cv::GaussianBlur(dxx, dxx, cv::Size(9, 9), 0, 0);
+    cv::GaussianBlur(dyy, dyy, cv::Size(9, 9), 0, 0);
+    cv::GaussianBlur(dxy, dxy, cv::Size(9, 9), 0, 0);
+    // local edge orientation from eigenvector
+    cv::Mat lambda_2, tmp1, tmp2, disc, flowx, flowy, tmpx, tmpy;
+    tmp1 = dxx - dyy;
+    multiply(tmp1, tmp1, tmp1);
+    multiply(dxy, dxy, tmp2);
+    cv::sqrt(tmp1 + 4.0 * dxy, disc);
+    lambda_2 = (dxx + dxy - disc) * 0.5;
+    tmpx = lambda_2 - dyy;
+    tmpy = dxy;
+    // normalize
+    cv::Mat tmpxx, tmpyy, mag;
+    multiply(tmpx, tmpx, tmpxx);
+    multiply(tmpy, tmpy, tmpyy);
+    cv::sqrt(tmpxx + tmpyy, mag);
+    cv::divide(tmpx, mag, dst_x);
+    cv::divide(tmpy, mag, dst_y);
+}
+
 int main(int argc, char **argv) {
     // TODO: split this up
-    cv::Mat image, image_g1, image_g2, image_gdiff, image_threshold;
+    cv::Mat image, image_g1, image_g2, image_gdiff, image_threshold, flowx, flowy;
     std::vector<std::vector<cv::Point>> contours;
     CDT cdt;
 
@@ -95,7 +129,7 @@ int main(int argc, char **argv) {
         printf("Usage: %s [image] [output file]\n", argv[0]);
         return 1;
     }
-    image = cv::imread(argv[1], cv::IMREAD_GRAYSCALE);
+    image = cv::imread(argv[1]);
     if (!image.data) {
         printf("no image data\n");
         return 1;
@@ -103,11 +137,38 @@ int main(int argc, char **argv) {
 
     // required edges
     // TODO: actual FDoG
+    flow_map(image, flowx, flowy);
+
+    cv::Mat tmpx, tmpy, tmpxn, tmpyn;
+    tmpxn = flowx * 128.0 + 128.0;
+    tmpyn = flowy * 128.0 + 128.0;
+    tmpxn.convertTo(tmpx, CV_8U);
+    tmpyn.convertTo(tmpy, CV_8U);
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Display Image", tmpx);
+    cv::waitKey(0);
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Display Image", tmpy);
+    cv::waitKey(0);
+
+    // cv::cvtColor(image, image, cv::COLOR_BGR2Lab);
     cv::GaussianBlur(image, image_g1, cv::Size(3, 3), 0, 0);
     cv::GaussianBlur(image, image_g2, cv::Size(5, 5), 0, 0);
     image_gdiff = image_g1 - image_g2;
+    // cv::cvtColor(image_gdiff, image_gdiff, cv::COLOR_Lab2BGR);
+    cv::cvtColor(image_gdiff, image_gdiff, cv::COLOR_BGR2GRAY);
     cv::threshold(image_gdiff, image_threshold, 127, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Display Image", image_threshold);
+    cv::waitKey(0);
+
     cv::ximgproc::thinning(image_threshold, image_threshold);
+
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Display Image", image_threshold);
+    cv::waitKey(0);
+
     cv::findContours(image_threshold, contours, cv::RETR_LIST,
                      cv::CHAIN_APPROX_TC89_KCOS); // ???
     // optional edges
@@ -203,8 +264,22 @@ int main(int argc, char **argv) {
         } else {
             cv::Point v1 = positions[index[source(*ei, g)]];
             cv::Point v2 = positions[index[target(*ei, g)]];
-            // TODO flow alignment term from FDoG
-            boost::put(weights, *ei, ALPHA_O*hypot(v1.x-v2.x, v1.y-v2.y));
+            double evecx = v1.x - v2.x;
+            double evecy = v1.y - v2.y;
+            double length = hypot(evecx, evecy);
+            double flowx_v1 = flowx.at<float>((int)v1.y, (int)v1.x);
+            double flowy_v1 = flowy.at<float>((int)v1.y, (int)v1.x);
+            double flowx_v2 = flowx.at<float>((int)v2.y, (int)v2.x);
+            double flowy_v2 = flowy.at<float>((int)v2.y, (int)v2.x);
+            // TODO: inserted abs since flowx/flowy only provide orientation, not direction
+            double alignment_v1 =
+                1 -
+                exp(-5 * pow(1 - abs(evecx * flowx_v1 / length + evecy * flowy_v1 / length), 2));
+            double alignment_v2 =
+                1 -
+                exp(-5 * pow(1 - abs(evecx * flowx_v2 / length + evecy * flowy_v2 / length), 2));
+            double alignment = (alignment_v1 + alignment_v2) * length / 2.0;
+            boost::put(weights, *ei, ALPHA_O * (length + BETA * alignment));
         }
     }
     boost::kruskal_minimum_spanning_tree(g, std::back_inserter(mst));
