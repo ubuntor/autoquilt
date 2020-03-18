@@ -245,11 +245,11 @@ int main(int argc, char **argv) {
     // TODO: A* with heuristic ALPHA_E*|e|
     PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     std::cout << "calculating odd vert distances" << std::endl;
+    std::vector<double> distances(boost::num_vertices(g));
     for (int i = 0; i < num_odd - 1; i++) {
         if (i % 100 == 0) {
             std::cout << "distance " << i << std::endl;
         }
-        std::vector<double> distances(boost::num_vertices(g));
         boost::dijkstra_shortest_paths(g, odd_verts[i],
                                        boost::distance_map(boost::make_iterator_property_map(
                                            distances.begin(), boost::get(boost::vertex_index, g))));
