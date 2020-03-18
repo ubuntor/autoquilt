@@ -11,6 +11,7 @@
 #include <math.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
+#include <opencv2/ximgproc.hpp>
 #include <queue>
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,14 +105,14 @@ int main(int argc, char **argv) {
 
     // required edges
     // TODO: actual FDoG
-    GaussianBlur(image, image_g1, Size(1, 1), 0, 0);
-    GaussianBlur(image, image_g2, Size(3, 3), 0, 0);
+    GaussianBlur(image, image_g1, Size(3, 3), 0, 0);
+    GaussianBlur(image, image_g2, Size(5, 5), 0, 0);
     image_gdiff = image_g1 - image_g2;
     threshold(image_gdiff, image_threshold, 127, 255,
               THRESH_BINARY | THRESH_OTSU);
+    ximgproc::thinning(image_threshold, image_threshold);
     findContours(image_threshold, contours, RETR_LIST,
                  CHAIN_APPROX_TC89_KCOS); // ???
-
     // optional edges
     std::cout << "Contours found" << std::endl;
     for (std::vector<Point> i : contours) {
