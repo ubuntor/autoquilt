@@ -84,12 +84,10 @@ class astar_goal_visitor : public boost::default_astar_visitor {
     Vertex m_goal;
 };
 
-using namespace cv;
-
 int main(int argc, char **argv) {
     // TODO: split this up
-    Mat image, image_g1, image_g2, image_gdiff, image_threshold;
-    std::vector<std::vector<Point>> contours;
+    cv::Mat image, image_g1, image_g2, image_gdiff, image_threshold;
+    std::vector<std::vector<cv::Point>> contours;
     CDT cdt;
 
     // TODO: actual arg parsing
@@ -97,7 +95,7 @@ int main(int argc, char **argv) {
         printf("Usage: %s [image] [output file]\n", argv[0]);
         return 1;
     }
-    image = imread(argv[1], IMREAD_GRAYSCALE);
+    image = cv::imread(argv[1], cv::IMREAD_GRAYSCALE);
     if (!image.data) {
         printf("no image data\n");
         return 1;
@@ -105,17 +103,16 @@ int main(int argc, char **argv) {
 
     // required edges
     // TODO: actual FDoG
-    GaussianBlur(image, image_g1, Size(3, 3), 0, 0);
-    GaussianBlur(image, image_g2, Size(5, 5), 0, 0);
+    cv::GaussianBlur(image, image_g1, cv::Size(3, 3), 0, 0);
+    cv::GaussianBlur(image, image_g2, cv::Size(5, 5), 0, 0);
     image_gdiff = image_g1 - image_g2;
-    threshold(image_gdiff, image_threshold, 127, 255,
-              THRESH_BINARY | THRESH_OTSU);
-    ximgproc::thinning(image_threshold, image_threshold);
-    findContours(image_threshold, contours, RETR_LIST,
-                 CHAIN_APPROX_TC89_KCOS); // ???
+    cv::threshold(image_gdiff, image_threshold, 127, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    cv::ximgproc::thinning(image_threshold, image_threshold);
+    cv::findContours(image_threshold, contours, cv::RETR_LIST,
+                     cv::CHAIN_APPROX_TC89_KCOS); // ???
     // optional edges
     std::cout << "Contours found" << std::endl;
-    for (std::vector<Point> i : contours) {
+    for (std::vector<cv::Point> i : contours) {
         for (int j = 0; j < i.size() - 1; j++) {
             cdt.insert_constraint(CDT::Point(i[j].x, i[j].y),
                                   CDT::Point(i[j + 1].x, i[j + 1].y));
@@ -126,18 +123,18 @@ int main(int argc, char **argv) {
     assert(cdt.is_valid());
 
     Graph g(cdt.number_of_vertices());
-    std::vector<Point> positions(cdt.number_of_vertices());
+    std::vector<cv::Point> positions(cdt.number_of_vertices());
 
     int id = 0;
     for (CDT::Finite_vertices_iterator it = cdt.finite_vertices_begin();
          it != cdt.finite_vertices_end(); ++it) {
         // std::cout << it->point() << std::endl;
         it->id() = id;
-        positions[id] = Point(it->point().x(), it->point().y());
+        positions[id] = cv::Point(it->point().x(), it->point().y());
         id++;
     }
 
-    Mat drawing = Mat::zeros(image_threshold.size(), CV_8UC3); // ???
+    cv::Mat drawing = cv::Mat::zeros(image_threshold.size(), CV_8UC3); // ???
 
     // convert cdt to boost graph
     for (CDT::Finite_edges_iterator eit = cdt.finite_edges_begin();
@@ -204,8 +201,8 @@ int main(int argc, char **argv) {
             // required edges are free
             boost::put(weights, *ei, 0);
         } else {
-            Point v1 = positions[index[source(*ei, g)]];
-            Point v2 = positions[index[target(*ei, g)]];
+            cv::Point v1 = positions[index[source(*ei, g)]];
+            cv::Point v2 = positions[index[target(*ei, g)]];
             // TODO flow alignment term from FDoG
             boost::put(weights, *ei, ALPHA_O*hypot(v1.x-v2.x, v1.y-v2.y));
         }
@@ -218,8 +215,8 @@ int main(int argc, char **argv) {
     // fill in required edge weights
     for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ei++) {
         if (boost::get(necessity, *ei) == required) {
-            Point v1 = positions[index[source(*ei, g)]];
-            Point v2 = positions[index[target(*ei, g)]];
+            cv::Point v1 = positions[index[source(*ei, g)]];
+            cv::Point v2 = positions[index[target(*ei, g)]];
             boost::put(weights, *ei, ALPHA_E * hypot(v1.x - v2.x, v1.y - v2.y));
         }
     }
@@ -343,13 +340,13 @@ int main(int argc, char **argv) {
         std::cout << "could not open output file!" << std::endl;
         return 1;
     }
-    double scale = MAX_DIMENSION / ((double)max(image.cols, image.rows));
-    Point start = positions[index[boost::source(cycle.front(), g)]];
+    double scale = MAX_DIMENSION / ((double)std::max(image.cols, image.rows));
+    cv::Point start = positions[index[boost::source(cycle.front(), g)]];
     fprintf(pat_file, "N1G00X%.3fY%.3f\r\n", start.x * scale, MAX_DIMENSION - start.y * scale);
     int line_number = 1;
     for (Edge e : cycle) {
         Vertex v = boost::target(e, g);
-        Point p = positions[index[v]];
+        cv::Point p = positions[index[v]];
         fprintf(pat_file, "N%dG01X%.3fY%.3f\r\n", line_number, p.x * scale,
                 MAX_DIMENSION - p.y * scale);
         line_number++;
@@ -359,18 +356,18 @@ int main(int argc, char **argv) {
 
     for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
         if (boost::get(necessity, *ei) == required) {
-            line(drawing, positions[index[source(*ei, g)]],
-            positions[index[target(*ei, g)]], CV_RGB(0, 255, 0));
+            cv::line(drawing, positions[index[source(*ei, g)]], positions[index[target(*ei, g)]],
+                     CV_RGB(0, 255, 0));
         }
     }
     for (std::pair<int,int> matching_edge : matching_edges) {
-        line(drawing, positions[matching_edge.first], positions[matching_edge.second],
-             CV_RGB(255, 0, 0));
+        cv::line(drawing, positions[matching_edge.first], positions[matching_edge.second],
+                 CV_RGB(255, 0, 0));
     }
 
     // display
-    namedWindow("Display Image", WINDOW_AUTOSIZE);
-    imshow("Display Image", drawing);
-    waitKey(0);
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Display Image", drawing);
+    cv::waitKey(0);
     return 0;
 }
