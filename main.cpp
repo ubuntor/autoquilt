@@ -141,8 +141,8 @@ int main(int argc, char **argv) {
     flow_map(image, flowx, flowy);
 
     cv::Mat tmpx, tmpy, tmpxn, tmpyn;
-    tmpxn = flowx * 128.0 + 128.0;
-    tmpyn = flowy * 128.0 + 128.0;
+    tmpxn = flowx * 64.0 + 128.0;
+    tmpyn = flowy * 64.0 + 128.0;
     tmpxn.convertTo(tmpx, CV_8U);
     tmpyn.convertTo(tmpy, CV_8U);
     cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
@@ -336,6 +336,13 @@ int main(int argc, char **argv) {
     std::cout << "start matching" << std::endl;
     pm.Solve();
 
+    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
+        if (boost::get(necessity, *ei) == required) {
+            cv::line(drawing, positions[index[source(*ei, g)]], positions[index[target(*ei, g)]],
+                     CV_RGB(0, 255, 0));
+        }
+    }
+
     // TODO: use implicit line graph instead so we can add a curvature term
     std::vector<std::pair<int, int>> matching_edges;
     std::vector<Vertex> predecessors(boost::num_vertices(g));
@@ -429,17 +436,13 @@ int main(int argc, char **argv) {
     fprintf(pat_file, "N%dM02\r\n", line_number);
     fclose(pat_file);
 
-    for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
-        if (boost::get(necessity, *ei) == required) {
-            cv::line(drawing, positions[index[source(*ei, g)]], positions[index[target(*ei, g)]],
-                     CV_RGB(0, 255, 0));
-        }
-    }
+    cv::Mat drawing_matching = cv::Mat::zeros(image_threshold.size(), CV_8UC3); // ???
     for (std::pair<int,int> matching_edge : matching_edges) {
-        cv::line(drawing, positions[matching_edge.first], positions[matching_edge.second],
+        cv::line(drawing_matching, positions[matching_edge.first], positions[matching_edge.second],
                  CV_RGB(255, 0, 0));
     }
 
+    drawing = drawing + drawing_matching;
     // display
     cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
     cv::imshow("Display Image", drawing);
