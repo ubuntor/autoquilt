@@ -62,6 +62,7 @@ class graph_heuristic : public boost::astar_heuristic<Graph, double> {
   public:
     graph_heuristic(std::vector<cv::Point> p, Vertex goal) : m_positions(p), m_goal(goal){};
     double operator()(Vertex v) {
+        // lower bound for distance is euclidean distance, using required edge weights
         return ALPHA_E * hypot(m_positions[v].x - m_positions[m_goal].x,
                                m_positions[v].y - m_positions[m_goal].y);
     }
@@ -105,8 +106,8 @@ void flow_map(cv::Mat &src, cv::Mat &dst_x, cv::Mat &dst_y) {
     tmp1 = dxx - dyy;
     multiply(tmp1, tmp1, tmp1);
     multiply(dxy, dxy, tmp2);
-    cv::sqrt(tmp1 + 4.0 * dxy, disc);
-    lambda_2 = (dxx + dxy - disc) * 0.5;
+    cv::sqrt(tmp1 + 4.0 * tmp2, disc);
+    lambda_2 = (dxx + dyy - disc) * 0.5;
     tmpx = lambda_2 - dyy;
     tmpy = dxy;
     // normalize
@@ -271,7 +272,7 @@ int main(int argc, char **argv) {
             double flowy_v1 = flowy.at<float>((int)v1.y, (int)v1.x);
             double flowx_v2 = flowx.at<float>((int)v2.y, (int)v2.x);
             double flowy_v2 = flowy.at<float>((int)v2.y, (int)v2.x);
-            // TODO: inserted abs since flowx/flowy only provide orientation, not direction
+            // added abs since flowx/flowy only provide orientation, not direction
             double alignment_v1 =
                 1 -
                 exp(-5 * pow(1 - abs(evecx * flowx_v1 / length + evecy * flowy_v1 / length), 2));
@@ -315,7 +316,6 @@ int main(int argc, char **argv) {
 
     // minimum weight matching for odd-degree vertices
     // TODO: optimization? landmark distance estimation
-    // TODO: A* with heuristic ALPHA_E*|e|
     PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     std::cout << "calculating odd vert distances" << std::endl;
     std::vector<double> distances(boost::num_vertices(g));
