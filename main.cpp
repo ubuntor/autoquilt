@@ -13,6 +13,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/ximgproc.hpp>
 #include <queue>
+#include <random>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -110,13 +111,12 @@ void flow_map(cv::Mat &src, cv::Mat &dst_x, cv::Mat &dst_y) {
     cv::GaussianBlur(dyy, dyy, cv::Size(9, 9), 0, 0);
     cv::GaussianBlur(dxy, dxy, cv::Size(9, 9), 0, 0);
     // local edge orientation from eigenvector
-    cv::Mat lambda_2, tmp1, tmp2, disc, flowx, flowy, tmpx, tmpy;
+    cv::Mat tmp1, tmp2, disc, flowx, flowy, tmpx, tmpy;
     tmp1 = dxx - dyy;
     multiply(tmp1, tmp1, tmp1);
     multiply(dxy, dxy, tmp2);
     cv::sqrt(tmp1 + 4.0 * tmp2, disc);
-    lambda_2 = (dxx + dyy - disc) * 0.5;
-    tmpx = lambda_2 - dyy;
+    tmpx = (dxx - dyy - disc) * 0.5;
     tmpy = dxy;
     // normalize
     cv::Mat tmpxx, tmpyy, mag;
@@ -191,6 +191,100 @@ int output_pat_file(const char *filename, double scale, const std::vector<cv::Po
     return 0;
 }
 
+cv::RNG rng;
+
+void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::Mat &out) {
+    cv::Mat noise = cv::Mat::zeros(flowx.size(), CV_8UC1);
+    rng.fill(noise, cv::RNG::UNIFORM, 0, 256, true);
+    cv::GaussianBlur(noise, noise, cv::Size(3, 3), 0, 0);
+    noise.convertTo(noise, CV_32F);
+    out = cv::Mat::zeros(noise.size(), CV_32F);
+    int height = noise.rows;
+    int width = noise.cols;
+    float epsilon = 0.5;
+    int radius = 7;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            // evolve forwards
+            float sample_x = x;
+            float sample_y = y;
+            // flowx/flowy only provide orientation, not direction, so we keep track of
+            // the previously seen flow vector and follow the closest direction vector
+            float prev_flow_x = flowx.at<float>(y, x);
+            float prev_flow_y = flowy.at<float>(y, x);
+            float total = noise.at<float>(y, x);
+            for (int i = 0; i < radius; i++) {
+                int cy = (int)sample_y % height;
+                if (cy < 0) {
+                    cy += height;
+                }
+                int cx = (int)sample_x % width;
+                if (cx < 0) {
+                    cx += width;
+                }
+                float cur_flow_x = flowx.at<float>(cy, cx);
+                float cur_flow_y = flowy.at<float>(cy, cx);
+                if (prev_flow_x * cur_flow_x + prev_flow_y * cur_flow_y > 0) {
+                    sample_x += epsilon * cur_flow_x;
+                    sample_y += epsilon * cur_flow_y;
+                } else {
+                    sample_x -= epsilon * cur_flow_x;
+                    sample_y -= epsilon * cur_flow_y;
+                }
+                cy = (int)sample_y % height;
+                if (cy < 0) {
+                    cy += height;
+                }
+                cx = (int)sample_x % width;
+                if (cx < 0) {
+                    cx += width;
+                }
+                prev_flow_x = cur_flow_x;
+                prev_flow_y = cur_flow_y;
+                total += noise.at<float>(cy, cx);
+            }
+            // evolve backwards
+            sample_x = x;
+            sample_y = y;
+            prev_flow_x = -flowx.at<float>(y, x);
+            prev_flow_y = -flowy.at<float>(y, x);
+            for (int i = 0; i < radius; i++) {
+                int cy = (int)sample_y % height;
+                if (cy < 0) {
+                    cy += height;
+                }
+                int cx = (int)sample_x % width;
+                if (cx < 0) {
+                    cx += width;
+                }
+                float cur_flow_x = flowx.at<float>(cy, cx);
+                float cur_flow_y = flowy.at<float>(cy, cx);
+                if (prev_flow_x * cur_flow_x + prev_flow_y * cur_flow_y > 0) {
+                    sample_x += epsilon * cur_flow_x;
+                    sample_y += epsilon * cur_flow_y;
+                } else {
+                    sample_x -= epsilon * cur_flow_x;
+                    sample_y -= epsilon * cur_flow_y;
+                }
+                cy = (int)sample_y % height;
+                if (cy < 0) {
+                    cy += height;
+                }
+                cx = (int)sample_x % width;
+                if (cx < 0) {
+                    cx += width;
+                }
+                prev_flow_x = cur_flow_x;
+                prev_flow_y = cur_flow_y;
+                total += noise.at<float>(cy, cx);
+            }
+            // average over 21 samples
+            out.at<float>(y, x) = total / (2 * radius + 1);
+        }
+    }
+    out.convertTo(out, CV_8UC1);
+}
+
 int main(int argc, char **argv) {
     // TODO: split this up
     cv::Mat image, image_g1, image_g2, image_gdiff, image_threshold, flowx, flowy;
@@ -208,20 +302,26 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Display Image", image);
+    cv::waitKey(0);
+
     // required edges
     // TODO: actual FDoG
     flow_map(image, flowx, flowy);
 
-    cv::Mat tmpx, tmpy, tmpxn, tmpyn;
-    tmpxn = flowx * 64.0 + 128.0;
-    tmpyn = flowy * 64.0 + 128.0;
-    tmpxn.convertTo(tmpx, CV_8U);
-    tmpyn.convertTo(tmpy, CV_8U);
+    cv::Mat tmp_lic, tmp_phase;
+    line_integral_convolution(flowx, flowy, tmp_lic);
     cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
-    cv::imshow("Display Image", tmpx);
+    cv::imshow("Display Image", tmp_lic);
     cv::waitKey(0);
+    cv::phase(flowx, flowy, tmp_phase, true);
+    cv::subtract(tmp_phase, 180.0f, tmp_phase, (tmp_phase > 180.0f));
+    tmp_phase = tmp_phase * (255.0 / 180.0);
+    tmp_phase.convertTo(tmp_phase, CV_8UC1);
+    cv::applyColorMap(tmp_phase, tmp_phase, cv::COLORMAP_HSV);
     cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
-    cv::imshow("Display Image", tmpy);
+    cv::imshow("Display Image", tmp_phase);
     cv::waitKey(0);
 
     // cv::cvtColor(image, image, cv::COLOR_BGR2Lab);
@@ -287,11 +387,12 @@ int main(int argc, char **argv) {
     // add optional bridge edges
 
     IndexMap index = boost::get(boost::vertex_index, g);
+    int num_vertices = boost::num_vertices(g);
 
     vertex_iter vp, vp_end;
     std::queue<Vertex> queue;
     std::vector<std::pair<int, int>> bridge_edges;
-    std::vector<int> distance(boost::num_vertices(g));
+    std::vector<int> distance(num_vertices);
     for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
         if (index[*vp] % 100 == 0) {
             std::cout << "bridging " << index[*vp] << std::endl;
@@ -320,7 +421,7 @@ int main(int argc, char **argv) {
         boost::add_edge(bridge_edge.first, bridge_edge.second, optional, g);
         //line(drawing, positions[bridge_edge.first], positions[bridge_edge.second], CV_RGB(0, 0, 255));
     }
-    std::cout << "done adding bridge edges: # verts: " << boost::num_vertices(g)
+    std::cout << "done adding bridge edges: # verts: " << num_vertices
               << " # edges: " << boost::num_edges(g) << std::endl;
 
     // mst to connect graph
@@ -385,20 +486,45 @@ int main(int argc, char **argv) {
     std::cout << "# odd: " << num_odd << std::endl;
 
     // minimum weight matching for odd-degree vertices
-    // TODO: optimization? landmark distance estimation
-    PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
+    // TODO: better landmark selection: use centrality instead of random
+
+    std::random_device rd;
+    std::mt19937 rng(rd());
+    std::uniform_int_distribution<int> uni(0, num_vertices - 1);
+
+    int num_landmarks = std::min(100, num_vertices); // TODO: tweak this
     std::cout << "calculating odd vert distances" << std::endl;
-    std::vector<double> distances(boost::num_vertices(g));
+    std::vector<Vertex> landmarks;
+    std::vector<double> landmark_distances(num_landmarks * num_vertices);
+    std::vector<double> distances(num_vertices);
+    for (int i = 0; i < num_landmarks; i++) {
+        landmarks.push_back(uni(rng));
+    }
+
+    for (int i = 0; i < num_landmarks; i++) {
+        boost::dijkstra_shortest_paths(g, landmarks[i],
+                                       boost::distance_map(boost::make_iterator_property_map(
+                                           distances.begin(), boost::get(boost::vertex_index, g))));
+        for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+            landmark_distances[index[*vp] * num_landmarks + i] = distances[*vp];
+        }
+    }
+
+    PerfectMatching pm(num_odd, (num_odd - 1) * num_odd / 2); // TODO: what if this overflows?
     for (int i = 0; i < num_odd - 1; i++) {
         if (i % 100 == 0) {
             std::cout << "distance " << i << std::endl;
         }
-        boost::dijkstra_shortest_paths(g, odd_verts[i],
-                                       boost::distance_map(boost::make_iterator_property_map(
-                                           distances.begin(), boost::get(boost::vertex_index, g))));
         for (int j = i + 1; j < num_odd; j++) {
+            // use landmark distance upper bound
+            double mindist = std::numeric_limits<double>::infinity();
+            for (int k = 0; k < num_landmarks; k++) {
+                mindist = std::min(mindist,
+                                   landmark_distances[index[odd_verts[i]] * num_landmarks + k] +
+                                       landmark_distances[index[odd_verts[j]] * num_landmarks + k]);
+            }
             // blossom5 needs integer weights for optimality
-            int weight = (int)(MATCHING_DISTANCE_SCALE * distances[odd_verts[j]]);
+            int weight = (int)(MATCHING_DISTANCE_SCALE * mindist);
             // std::cout << odd_verts[i] << " <-> " << odd_verts[j] << ": " << weight << std::endl;
             pm.AddEdge(i, j, weight);
         }
