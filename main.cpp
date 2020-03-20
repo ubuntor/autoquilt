@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
                     distance[index[*ai]] = cur_distance+1;
                     // don't bridge immediate neighbors, prevent double counting bridge edges
                     if (cur_distance > 1 && index[*vp] < index[*ai]) {
-                        bridge_edges.push_back(std::pair<int,int>(index[*vp], index[*ai]));
+                        bridge_edges.push_back(std::make_pair(index[*vp], index[*ai]));
                     }
                 }
             }
@@ -486,22 +486,56 @@ int main(int argc, char **argv) {
     std::cout << "# odd: " << num_odd << std::endl;
 
     // minimum weight matching for odd-degree vertices
-    // TODO: better landmark selection: use centrality instead of random
-
     std::random_device rd;
     std::mt19937 rng(rd());
     std::uniform_int_distribution<int> uni(0, num_vertices - 1);
-
-    int num_landmarks = std::min(100, num_vertices); // TODO: tweak this
+    int num_seeds = std::min(200, num_vertices);     // TODO: tweak this
+    int num_landmarks = std::min(300, num_vertices); // TODO: tweak this
     std::cout << "calculating odd vert distances" << std::endl;
     std::vector<Vertex> landmarks;
-    std::vector<double> landmark_distances(num_landmarks * num_vertices);
-    std::vector<double> distances(num_vertices);
-    for (int i = 0; i < num_landmarks; i++) {
-        landmarks.push_back(uni(rng));
-    }
+    std::vector<double> centrality(num_vertices);
+    std::vector<std::pair<double, Vertex>> centrality_verts;
 
+    std::vector<double> distances(num_vertices);
+    std::vector<bool> is_taken(num_vertices);
+    for (int i = 0; i < num_seeds; i++) {
+        Vertex seed = uni(rng);
+        if (i % 10 == 0) {
+            std::cout << "centrality seed " << i << std::endl;
+        }
+        boost::dijkstra_shortest_paths(g, seed,
+                                       boost::distance_map(boost::make_iterator_property_map(
+                                           distances.begin(), boost::get(boost::vertex_index, g))));
+        for (boost::tie(vp, vp_end) = boost::vertices(g); vp != vp_end; ++vp) {
+            centrality[*vp] += distances[*vp];
+        }
+    }
+    for (int i = 0; i < num_vertices; i++) {
+        centrality_verts.push_back(std::make_pair(centrality[i], i));
+    }
+    std::sort(std::begin(centrality_verts), std::end(centrality_verts));
+    int landmarks_found = 0;
+    for (std::pair<double, Vertex> v : centrality_verts) {
+        if (!is_taken[v.second]) {
+            landmarks_found++;
+            landmarks.push_back(v.second);
+            is_taken[v.second] = true;
+            adj_iter ai, ai_end;
+            /*for (boost::tie(ai, ai_end) = boost::adjacent_vertices(v.second, g); ai != ai_end;
+            ++ai) { is_taken[*ai] = true;
+            }*/
+        }
+        if (landmarks_found == num_landmarks) {
+            break;
+        }
+    }
+    num_landmarks = std::min(landmarks_found, num_landmarks);
+    std::cout << "found " << num_landmarks << " landmarks" << std::endl;
+    std::vector<double> landmark_distances(num_landmarks * num_vertices);
     for (int i = 0; i < num_landmarks; i++) {
+        if (i % 10 == 0) {
+            std::cout << "landmark " << i << std::endl;
+        }
         boost::dijkstra_shortest_paths(g, landmarks[i],
                                        boost::distance_map(boost::make_iterator_property_map(
                                            distances.begin(), boost::get(boost::vertex_index, g))));
@@ -559,8 +593,7 @@ int main(int argc, char **argv) {
                 Vertex current = goal;
                 while (current != start) {
                     Vertex predecessor = predecessors[current];
-                    matching_edges.push_back(
-                        std::pair<int, int>(index[current], index[predecessor]));
+                    matching_edges.push_back(std::make_pair(index[current], index[predecessor]));
                     current = predecessor;
                 }
             }
