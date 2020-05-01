@@ -34,18 +34,19 @@
 // TODO: make this an option
 #define MAX_DIMENSION 10
 
-// TODO: currently only "body" parameters: add the face/hair/background params
+// TODO: add params from paper
+// Note: N_a is unused, since it feeds into color quantization in the
+// original FDoG paper.
 #define FDOG_SIGMA_SST 5
-#define FDOG_N_BFA 4
 #define FDOG_N_BF 1
 #define FDOG_SIGMA_BF_D 10
 #define FDOG_SIGMA_BF_R 0.045
 #define FDOG_N_FDOG 2
-#define FDOG_SIGMA_FDOG_E 2
-#define FDOG_SIGMA_FDOG_R 3
-#define FDOG_SIGMA_FDOG_M 5
+#define FDOG_SIGMA_FDOG_E 1 //2
+#define FDOG_SIGMA_FDOG_R 1.6 //3
+#define FDOG_SIGMA_FDOG_M 2 //5
 #define FDOG_TAU 0.99
-#define FDOG_PHI 50
+#define FDOG_PHI 1 //50
 
 // TODO move this somewhere else
 // CGAL triangulation
@@ -307,8 +308,8 @@ int main(int argc, char **argv) {
     CDT cdt;
 
     // TODO: actual arg parsing
-    if (argc <= 2) {
-        printf("Usage: %s [image] [output file]\n", argv[0]);
+    if (argc <= 3) {
+        printf("Usage: %s [image] [flow image from flowabs] [output file]\n", argv[0]);
         return 1;
     }
     image = cv::imread(argv[1]);
@@ -322,7 +323,6 @@ int main(int argc, char **argv) {
     cv::waitKey(0);
 
     // required edges
-    // TODO: actual FDoG
     flow_map(image, flowx, flowy);
 
     cv::Mat tmp_lic, tmp_phase;
@@ -339,6 +339,10 @@ int main(int argc, char **argv) {
     cv::imshow("Display Image", tmp_phase);
     cv::waitKey(0);
 
+    // TODO: orientation-aligned bilateral filter
+    // TODO: FDoG
+
+    /*
     // cv::cvtColor(image, image, cv::COLOR_BGR2Lab);
     cv::GaussianBlur(image, image_g1, cv::Size(3, 3), 0, 0);
     cv::GaussianBlur(image, image_g2, cv::Size(5, 5), 0, 0);
@@ -346,6 +350,11 @@ int main(int argc, char **argv) {
     // cv::cvtColor(image_gdiff, image_gdiff, cv::COLOR_Lab2BGR);
     cv::cvtColor(image_gdiff, image_gdiff, cv::COLOR_BGR2GRAY);
     cv::threshold(image_gdiff, image_threshold, 127, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    */
+
+    image_threshold = cv::imread(argv[2]);
+    cv::cvtColor(image_threshold, image_threshold, cv::COLOR_BGR2GRAY);
+    image_threshold = cv::Scalar::all(255) - image_threshold;
 
     cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
     cv::imshow("Display Image", image_threshold);
@@ -593,7 +602,7 @@ int main(int argc, char **argv) {
     std::cout << "done converting to cycle" << std::endl;
 
     double scale = MAX_DIMENSION / ((double)std::max(image.cols, image.rows));
-    if (output_pat_file(argv[2], scale, positions, index, cycle, g)) {
+    if (output_pat_file(argv[3], scale, positions, index, cycle, g)) {
         return 1;
     }
 
