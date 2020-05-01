@@ -215,7 +215,7 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
     out = cv::Mat::zeros(noise.size(), CV_32F);
     int height = noise.rows;
     int width = noise.cols;
-    float epsilon = 1;
+    float epsilon = 1.5;
     int radius = 20;
     float sigma = 5;
     for (int y = 0; y < height; y++) {
@@ -294,8 +294,9 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
                 prev_flow_y = cur_flow_y;
                 total += exp(-pow((i+1)/sigma, 2)/2) * noise.at<float>(cy, cx);
             }
-            // normalize
-            out.at<float>(y, x) = total / (sigma * sqrt(2*M_PI));
+            // normalize and emphasize
+            out.at<float>(y, x) = ((total / (sigma * sqrt(2*M_PI)))-127.5)*1.5 + 127.5;
+            // emphasize
         }
     }
     out.convertTo(out, CV_8UC1);
