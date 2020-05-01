@@ -27,3 +27,5 @@ use a better selection algorithm
 a curvature term to the cost
 * General cleanup
 * Test building on other platforms
+* OpenMP?
+* OpenGL visualizer?

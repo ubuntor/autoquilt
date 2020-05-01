@@ -26,13 +26,26 @@
 
 // TODO: tweak these
 // alignment weight in optional edge weight
-#define BETA 5
+#define BETA 2
 // curvature weight in matching path line graph edge weight
 #define GAMMA 2
 #define MATCHING_DISTANCE_SCALE 1000
 
 // TODO: make this an option
 #define MAX_DIMENSION 10
+
+// TODO: currently only "body" parameters: add the face/hair/background params
+#define FDOG_SIGMA_SST 5
+#define FDOG_N_BFA 4
+#define FDOG_N_BF 1
+#define FDOG_SIGMA_BF_D 10
+#define FDOG_SIGMA_BF_R 0.045
+#define FDOG_N_FDOG 2
+#define FDOG_SIGMA_FDOG_E 2
+#define FDOG_SIGMA_FDOG_R 3
+#define FDOG_SIGMA_FDOG_M 5
+#define FDOG_TAU 0.99
+#define FDOG_PHI 50
 
 // TODO move this somewhere else
 // CGAL triangulation
@@ -201,8 +214,9 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
     out = cv::Mat::zeros(noise.size(), CV_32F);
     int height = noise.rows;
     int width = noise.cols;
-    float epsilon = 0.5;
-    int radius = 7;
+    float epsilon = 1;
+    int radius = 20;
+    float sigma = 5;
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             // evolve forwards
@@ -212,6 +226,7 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
             // the previously seen flow vector and follow the closest direction vector
             float prev_flow_x = flowx.at<float>(y, x);
             float prev_flow_y = flowy.at<float>(y, x);
+            // samples weighted by gaussian distribution
             float total = noise.at<float>(y, x);
             for (int i = 0; i < radius; i++) {
                 int cy = (int)sample_y % height;
@@ -241,7 +256,7 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
                 }
                 prev_flow_x = cur_flow_x;
                 prev_flow_y = cur_flow_y;
-                total += noise.at<float>(cy, cx);
+                total += exp(-pow((i+1)/sigma, 2)/2) * noise.at<float>(cy, cx);
             }
             // evolve backwards
             sample_x = x;
@@ -276,10 +291,10 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
                 }
                 prev_flow_x = cur_flow_x;
                 prev_flow_y = cur_flow_y;
-                total += noise.at<float>(cy, cx);
+                total += exp(-pow((i+1)/sigma, 2)/2) * noise.at<float>(cy, cx);
             }
-            // average over 21 samples
-            out.at<float>(y, x) = total / (2 * radius + 1);
+            // normalize
+            out.at<float>(y, x) = total / (sigma * sqrt(2*M_PI));
         }
     }
     out.convertTo(out, CV_8UC1);
@@ -492,7 +507,7 @@ int main(int argc, char **argv) {
     std::mt19937 rng(rd());
     std::uniform_int_distribution<int> uni(0, num_vertices - 1);
 
-    int num_landmarks = std::min(100, num_vertices); // TODO: tweak this
+    int num_landmarks = std::min(300, num_vertices); // TODO: tweak this
     std::cout << "calculating odd vert distances" << std::endl;
     std::vector<Vertex> landmarks;
     std::vector<double> landmark_distances(num_landmarks * num_vertices);
@@ -502,6 +517,9 @@ int main(int argc, char **argv) {
     }
 
     for (int i = 0; i < num_landmarks; i++) {
+        if (i % 100 == 0) {
+            std::cout << "landmark " << i << std::endl;
+        }
         boost::dijkstra_shortest_paths(g, landmarks[i],
                                        boost::distance_map(boost::make_iterator_property_map(
                                            distances.begin(), boost::get(boost::vertex_index, g))));
