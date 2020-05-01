@@ -296,7 +296,6 @@ void line_integral_convolution(const cv::Mat &flowx, const cv::Mat &flowy, cv::M
             }
             // normalize and emphasize
             out.at<float>(y, x) = ((total / (sigma * sqrt(2*M_PI)))-127.5)*1.5 + 127.5;
-            // emphasize
         }
     }
     out.convertTo(out, CV_8UC1);
