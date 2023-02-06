@@ -19,7 +19,7 @@ make
 
 ## Usage
 ```
-autoquilt [image] [FDoG image from flowabs] [output pattern file]
+./autoquilt [image] [FDoG image from flowabs] [output pattern file]
 ```
 
 As a temporary workaround until FDoG is implemented, get the FDoG image from https://github.com/MzHub/flowabs (binaries at https://code.google.com/archive/p/flowabs/downloads).
